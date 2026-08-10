@@ -4,8 +4,10 @@ from passlib.context import CryptContext
 
 from app.core.config import settings
 
-# Password hashing context using bcrypt
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing context using Argon2 (recommended):
+# - Argon2 is memory-hard and has no 72-byte limit like bcrypt.
+# - Install `argon2-cffi` to enable this backend.
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

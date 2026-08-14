@@ -1,7 +1,9 @@
 import uuid
+from typing import TYPE_CHECKING
 from datetime import datetime, timezone
 from sqlalchemy import UUID, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
+
 
 from app.db.base import Base
 

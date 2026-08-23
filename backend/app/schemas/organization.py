@@ -34,5 +34,5 @@ class WorkspaceResponse(BaseModel):
     organization_id: uuid.UUID
     created_at: datetime
 
-    class Config:
+    class Config:   # only for responses
         from_attributes = True

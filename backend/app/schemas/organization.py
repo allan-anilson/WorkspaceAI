@@ -34,5 +34,5 @@ class WorkspaceResponse(BaseModel):
     organization_id: uuid.UUID
     created_at: datetime
 
-    class Config:   # only for responses
+    class Config:   # only for responses (not json, in sqlachemy format)
         from_attributes = True

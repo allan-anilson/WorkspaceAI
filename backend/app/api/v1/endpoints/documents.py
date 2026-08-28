@@ -8,10 +8,10 @@ from app.db.models.user import User
 from app.schemas.document import DocumentResponse
 from app.services.document_service import DocumentService
 
-router = APIRouter()
+router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 
 
-@router.post("/workspaces/{workspace_id}/documents", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED, summary="Upload a document to a workspace",)
+@router.post("/{workspace_id}/documents", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED, summary="Upload a document to a workspace",)
 async def upload_document(
     workspace_id: uuid.UUID,
     file: UploadFile = File(...),
@@ -24,7 +24,7 @@ async def upload_document(
     )
 
 
-@router.get("/workspaces/{workspace_id}/documents", response_model=List[DocumentResponse], summary="List all documents in a workspace",)
+@router.get("/{workspace_id}/documents", response_model=List[DocumentResponse], summary="List all documents in a workspace",)
 async def list_workspace_documents(
     workspace_id: uuid.UUID,
     current_user: User = Depends(get_current_user),

@@ -10,6 +10,7 @@ from app.db.base import Base
 # IMPORTANT: Import all models here so Base.metadata knows about them
 from app.db.models.user import User  # noqa: F401
 from app.db.models.organization import Organization, OrgMember, Workspace
+from app.db.models.document import Document  # noqa: F401
 
 # Alembic Config object
 config = context.config

@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int
     POSTGRES_DB: str
 
+    #Gemini LLM creds:
+    GEMINI_API_KEY: str
+    EMBEDDING_MODEL: str = "text-embedding-004"
+    EMBEDDING_DIMENSION: int = 768
+    LLM_MODEL: str = "gemini-2.5-flash"
+
     @property
     def ASYNC_DATABASE_URL(self) -> str:
         """Constructs the asyncpg connection string."""

@@ -23,10 +23,12 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
+# Alias for background worker tasks and scripts
+async_session_maker = AsyncSessionLocal
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Dependency that yields an async database session per request
-
     and automatically handles transaction commit/rollback.
     """
     async with AsyncSessionLocal() as session:

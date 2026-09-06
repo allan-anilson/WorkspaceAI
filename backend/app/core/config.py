@@ -14,9 +14,9 @@ class Settings(BaseSettings):
 
     #Gemini LLM creds:
     GEMINI_API_KEY: str
-    EMBEDDING_MODEL: str = "text-embedding-004"
+    EMBEDDING_MODEL: str = "gemini-embedding-001"
     EMBEDDING_DIMENSION: int = 768
-    LLM_MODEL: str = "gemini-2.5-flash"
+    LLM_MODEL: str = "gemini-3.6-flash"
 
     @property
     def ASYNC_DATABASE_URL(self) -> str:

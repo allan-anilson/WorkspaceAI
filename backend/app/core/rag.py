@@ -43,14 +43,16 @@ def split_text_into_chunks(
 
 
 async def get_embeddings(texts: list[str]) -> list[list[float]]:
-    """Generates vector embeddings via Gemini text-embedding-004."""
+    """Generates vector embeddings via Gemini embedding model."""
     if not texts:
         return []
 
-    # Gemini async batch embeddings
     response = await client.aio.models.embed_content(
         model=settings.EMBEDDING_MODEL,
         contents=texts,
+        config=types.EmbedContentConfig(
+            output_dimensionality=768,
+        ),
     )
     return [item.values for item in response.embeddings]
 

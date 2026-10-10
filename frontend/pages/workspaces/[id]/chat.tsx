@@ -3,6 +3,7 @@ import {useRouter} from 'next/router'
 import {syncMessages, connectWorkspaceWs} from '../../../lib/api'
 import type { NextPage } from 'next'
 import ChatMessage from '../../../components/ChatMessage'
+import WorkspaceTabs from '../../../components/WorkspaceTabs'
 
 const ChatPage: NextPage = ()=>{
   const router = useRouter()
@@ -49,6 +50,7 @@ const ChatPage: NextPage = ()=>{
     <main className="max-w-4xl mx-auto mt-8">
       <div className="card">
         <h2 className="text-xl font-semibold mb-4">Workspace Chat: {workspaceId}</h2>
+        <WorkspaceTabs workspaceId={workspaceId as string} />
         <div ref={messagesRef} className="h-96 overflow-auto border rounded p-3 mb-3 bg-gray-50">
           {loading ? <div>Loading...</div> : messages.map((m,i)=> (
             <ChatMessage key={m.id || i} m={m} />

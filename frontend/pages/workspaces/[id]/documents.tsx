@@ -1,6 +1,7 @@
-import React, {useEffect, useState} from 'react'
+import React, {useEffect, useState, useRef} from 'react'
 import {useRouter} from 'next/router'
 import {listDocuments, uploadDocument, queryRAG} from '../../../lib/api'
+import WorkspaceTabs from '../../../components/WorkspaceTabs'
 import type { NextPage } from 'next'
 
 const DocumentsPage: NextPage = ()=>{
@@ -19,6 +20,8 @@ const DocumentsPage: NextPage = ()=>{
     listDocuments(workspaceId, token).then((res:any)=> setDocs(res)).catch(()=>{})
   },[workspaceId])
 
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
   async function handleUpload(e: React.FormEvent){
     e.preventDefault()
     const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null
@@ -27,6 +30,7 @@ const DocumentsPage: NextPage = ()=>{
       const added = await uploadDocument(workspaceId as string, file, token || undefined)
       setDocs(prev=>[added,...prev])
       setFile(null)
+      try{ if(fileInputRef.current) fileInputRef.current.value = '' }catch(_){/* ignore */}
     }catch(e){ console.error(e) }
   }
 
@@ -41,31 +45,34 @@ const DocumentsPage: NextPage = ()=>{
   }
 
   return (
-    <main style={{padding:16}}>
-      <h2>Documents: {workspaceId}</h2>
-      <form onSubmit={handleUpload} style={{marginBottom:12}}>
-        <input type="file" onChange={e=>setFile(e.target.files ? e.target.files[0] : null)} />
-        <button type="submit">Upload</button>
-      return (
-        <main className="max-w-4xl mx-auto mt-8">
-          <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Documents: {workspaceId}</h2>
-            <form onSubmit={handleUpload} className="mb-4 flex gap-2 items-center">
-              <input type="file" onChange={e=>setFile(e.target.files ? e.target.files[0] : null)} />
-              <button type="submit" className="bg-indigo-600 text-white px-3 py-2 rounded">Upload</button>
-            </form>
+    <main className="max-w-4xl mx-auto mt-8">
+      <div className="card">
+        <h2 className="text-xl font-semibold mb-4">Documents: {workspaceId}</h2>
+        <WorkspaceTabs workspaceId={workspaceId as string} />
+        <form onSubmit={handleUpload} className="mb-4 flex gap-2 items-center">
+          <input ref={fileInputRef} type="file" onChange={e=>setFile(e.target.files ? e.target.files[0] : null)} />
+          <button type="submit" className="bg-indigo-600 text-white px-3 py-2 rounded">Upload</button>
+        </form>
 
-            <h3 className="font-medium">Files</h3>
-            <ul className="mt-2 mb-4">
-              {docs.map(d=> <li key={d.id} className="py-2 border-b">{d.name} — {d.size || ''}</li>)}
-            </ul>
+        <h3 className="font-medium">Files</h3>
+        <ul className="mt-2 mb-4">
+          {docs.map(d=> (
+            <li key={d.id} className="py-2 border-b">
+              <span className="font-medium">{d.filename ?? d.name ?? '—'}</span>
+              <span className="text-sm text-gray-500 ml-2">{(d.file_size_bytes ?? d.size) ? `${(d.file_size_bytes ?? d.size)} bytes` : ''}</span>
+            </li>
+          ))}
+        </ul>
 
-            <h3 className="font-medium">Ask RAG</h3>
-            <form onSubmit={handleQuery} className="flex gap-2">
-              <input value={query} onChange={e=>setQuery(e.target.value)} className="flex-1 border rounded p-2" />
-              <button type="submit" className="bg-indigo-600 text-white px-3 py-2 rounded">Ask</button>
-            </form>
-            {answer && <div className="mt-4 whitespace-pre-wrap">{answer}</div>}
-          </div>
-        </main>
-      )
+        <h3 className="font-medium">Ask RAG</h3>
+        <form onSubmit={handleQuery} className="flex gap-2">
+          <input value={query} onChange={e=>setQuery(e.target.value)} className="flex-1 border rounded p-2" />
+          <button type="submit" className="bg-indigo-600 text-white px-3 py-2 rounded">Ask</button>
+        </form>
+        {answer && <div className="mt-4 whitespace-pre-wrap">{answer}</div>}
+      </div>
+    </main>
+  )
+}
+
+export default DocumentsPage

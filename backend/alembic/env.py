@@ -12,6 +12,7 @@ from app.db.models.user import User  # noqa: F401
 from app.db.models.organization import Organization, OrgMember, Workspace
 from app.db.models.document import Document  # noqa: F401
 from app.db.models.document_chunk import DocumentChunk
+from app.db.models.chat_message import WorkspaceMessage
 
 # Alembic Config object
 config = context.config

@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	html, body, #__next { height: 100%; }
+	body { @apply bg-gray-50 text-gray-900; font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+}
+
+main { @apply p-6; }
+
+.card { @apply bg-white shadow rounded p-4 }
+
+/* Import Inter font for improved typography */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+.container { max-width: 1100px; margin-left: auto; margin-right: auto; }
+
+/* Fallback styles in case Tailwind isn't built yet
+	 These ensure the app looks acceptable even if Tailwind CSS isn't processed. */
+nav { background: #fff; border-bottom: 1px solid #e6e6e6; }
+nav .text-xl { font-size: 1.125rem; font-weight: 600; color: #4f46e5; }
+.card { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); border-radius: 8px; padding: 16px; }
+input, textarea { border: 1px solid #d1d5db; padding: 8px; border-radius: 6px; }
+button { background: #4f46e5; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+button[disabled], button:disabled { opacity: 0.6; cursor: not-allowed; }
+aside { background: #fff; border-right: 1px solid #e6e6e6; padding: 12px; }
+.flex { display: flex; }
+.hidden { display: none; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+.mt-8 { margin-top: 2rem; }
+.max-w-4xl { max-width: 56rem; }
+.text-indigo-600 { color: #4f46e5; }
+.text-gray-600 { color: #4b5563; }
+a { color: #4f46e5; }
+
+/* Basic responsive fallback */
+@media (min-width: 768px) {
+	.hidden.md\:block { display: block; }
+}
+

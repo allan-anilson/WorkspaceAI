@@ -1,35 +1,90 @@
-import os
+import io
 import uuid
-from pathlib import Path
-import aiofiles
+from typing import BinaryIO
+import aioboto3
+from botocore.exceptions import ClientError
 from fastapi import UploadFile
 
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+from app.core.config import settings
 
 
-class LocalStorageService:
-    @staticmethod
-    async def save_file(workspace_id: uuid.UUID, file: UploadFile) -> tuple[str, int]:
-        """
-        Saves an uploaded file to a workspace-specific folder on disk.
-        Returns: (saved_relative_path, total_file_size_in_bytes)
-        """
-        ws_folder = UPLOAD_DIR / str(workspace_id)
-        ws_folder.mkdir(parents=True, exist_ok=True)
+class S3StorageService:
+    def __init__(self):
+        self.session = aioboto3.Session()
+        self.endpoint_url = settings.S3_ENDPOINT_URL.strip() if settings.S3_ENDPOINT_URL else None
+        self.access_key = settings.S3_ACCESS_KEY.strip() if settings.S3_ACCESS_KEY else None
+        self.secret_key = settings.S3_SECRET_KEY.strip() if settings.S3_SECRET_KEY else None
+        self.bucket_name = settings.S3_BUCKET_NAME.strip()
+        self.region = settings.S3_REGION.strip() if settings.S3_REGION else "us-east-1"
 
-        # Unique file name to prevent accidental overwrites
-        file_ext = Path(file.filename or "").suffix
-        unique_name = f"{uuid.uuid4()}{file_ext}"
-        target_path = ws_folder / unique_name
+    def _get_client_context(self):
+        client_kwargs = {
+            "service_name": "s3",
+            "region_name": self.region,
+        }
+        if self.endpoint_url:
+            client_kwargs["endpoint_url"] = self.endpoint_url
+        if self.access_key and self.secret_key:
+            client_kwargs["aws_access_key_id"] = self.access_key
+            client_kwargs["aws_secret_access_key"] = self.secret_key
 
-        total_bytes = 0
-        async with aiofiles.open(target_path, "wb") as out_file:
-            while chunk := await file.read(1024 * 1024):  # 1MB chunks
-                total_bytes += len(chunk)
-                await out_file.write(chunk)
+        return self.session.client(**client_kwargs)
 
-        # Reset pointer for downstream readers if needed
-        await file.seek(0)
+    async def ensure_bucket_exists(self) -> None:
+        """Create bucket if missing (primarily for local MinIO / staging setups)."""
+        async with self._get_client_context() as s3:
+            try:
+                await s3.head_bucket(Bucket=self.bucket_name)
+            except ClientError as e:
+                error_code = str(e.response.get("Error", {}).get("Code", ""))
+                # Only create if it definitively does not exist (404 / NotFound)
+                if error_code in ("404", "NoSuchBucket", "NotFound"):
+                    create_params = {"Bucket": self.bucket_name}
+                    if self.region != "us-east-1":
+                        create_params["CreateBucketConfiguration"] = {
+                            "LocationConstraint": self.region
+                        }
+                    await s3.create_bucket(**create_params)
+                else:
+                    # Log or ignore if already owned or managed externally on AWS
+                    pass
 
-        return str(target_path), total_bytes
+    async def upload_file(
+        self,
+        file_obj: UploadFile | BinaryIO | bytes,
+        storage_path: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Uploads file bytes or streams to S3 and returns the storage path key."""
+        if isinstance(file_obj, UploadFile):
+            stream = file_obj.file
+            content_type = file_obj.content_type or content_type
+        elif isinstance(file_obj, bytes):
+            stream = io.BytesIO(file_obj)
+        else:
+            stream = file_obj
+
+        async with self._get_client_context() as s3:
+            await s3.upload_fileobj(
+                Fileobj=stream,
+                Bucket=self.bucket_name,
+                Key=storage_path,
+                ExtraArgs={"ContentType": content_type},
+            )
+
+        return storage_path
+
+    async def download_bytes(self, storage_path: str) -> bytes:
+        """Reads file bytes from S3 for text extraction and chunk processing."""
+        async with self._get_client_context() as s3:
+            response = await s3.get_object(Bucket=self.bucket_name, Key=storage_path)
+            async with response["Body"] as stream:
+                return await stream.read()
+
+    async def delete_file(self, storage_path: str) -> None:
+        """Removes document object from S3."""
+        async with self._get_client_context() as s3:
+            await s3.delete_object(Bucket=self.bucket_name, Key=storage_path)
+
+
+storage_service = S3StorageService()

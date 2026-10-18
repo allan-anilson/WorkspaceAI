@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 768
     LLM_MODEL: str = "gemini-3.6-flash"
 
+    #AWS Creds:
+    S3_ENDPOINT_URL: str | None = None
+    S3_ACCESS_KEY: str = "minioadmin"
+    S3_SECRET_KEY: str = "minioadmin"
+    S3_BUCKET_NAME: str = "workspace-docs-allan-dev"
+    S3_REGION: str = "us-east-1"
+
     @property
     def ASYNC_DATABASE_URL(self) -> str:
         """Constructs the asyncpg connection string."""

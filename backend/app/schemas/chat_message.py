@@ -7,9 +7,10 @@ class WorkspaceMessageResponse(BaseModel):
     id: uuid.UUID
     seq_id: int
     workspace_id: uuid.UUID
-    sender_id: uuid.UUID
+    sender_id: uuid.UUID | None = None
     sender_name: str | None = None
     sender_email: str | None = None
+    is_bot: bool = False
     content: str
     created_at: datetime
 

@@ -1,4 +1,6 @@
+import io
 import uuid
+from pathlib import Path
 from typing import Sequence
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -10,7 +12,7 @@ from app.core.rag import (
     get_embeddings,
     split_text_into_chunks,
 )
-from app.core.storage import LocalStorageService
+from app.core.storage import storage_service
 from app.db.models.document import Document, DocumentStatus
 from app.db.models.document_chunk import DocumentChunk
 from app.db.models.organization import Workspace
@@ -23,8 +25,13 @@ from app.repositories.organization_repo import OrganizationRepository
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx", ".md"}
 
 
-async def process_document_background(document_id: uuid.UUID, file_path: str, workspace_id: uuid.UUID):
-    """Background worker task to extract, chunk, embed, and store vectors."""
+async def process_document_background(
+    document_id: uuid.UUID,
+    storage_path: str,
+    file_ext: str,
+    workspace_id: uuid.UUID,
+):
+    """Background worker task: streams bytes from S3, extracts text, embeds, and indexes."""
     async with async_session_maker() as db:
         doc_repo = DocumentRepository(db)
         chunk_repo = DocumentChunkRepository(db)
@@ -37,8 +44,16 @@ async def process_document_background(document_id: uuid.UUID, file_path: str, wo
             doc.status = DocumentStatus.PROCESSING
             await db.commit()
 
-            # 1. Extract & Chunk
-            raw_text = extract_text_from_file(file_path)
+            # 1. Download file bytes directly from S3/MinIO
+            file_bytes = await storage_service.download_bytes(storage_path)
+
+            # 2. Extract text (supports file-like object or bytes decoding)
+            if file_ext in (".txt", ".md"):
+                raw_text = file_bytes.decode("utf-8", errors="ignore")
+            else:
+                # Passes in-memory BytesIO stream for PDF/DOCX parsers
+                raw_text = extract_text_from_file(io.BytesIO(file_bytes), file_ext)
+
             chunks_text = split_text_into_chunks(raw_text)
 
             if not chunks_text:
@@ -46,10 +61,10 @@ async def process_document_background(document_id: uuid.UUID, file_path: str, wo
                 await db.commit()
                 return
 
-            # 2. Embed
+            # 3. Embed text chunks
             embeddings = await get_embeddings(chunks_text)
 
-            # 3. Store Chunks
+            # 4. Store Chunks in pgvector
             chunk_models = [
                 DocumentChunk(
                     document_id=doc.id,
@@ -64,6 +79,7 @@ async def process_document_background(document_id: uuid.UUID, file_path: str, wo
 
             doc.status = DocumentStatus.COMPLETED
             await db.commit()
+
         except Exception as e:
             await db.rollback()
             doc.status = DocumentStatus.FAILED
@@ -99,28 +115,44 @@ class DocumentService:
         await self._verify_workspace_access(workspace_id, current_user.id)
 
         filename = file.filename or "uploaded_file"
-        file_ext = "." + filename.split(".")[-1].lower() if "." in filename else ""
+        file_ext = Path(filename).suffix.lower()
         if file_ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file format")
 
-        file_path, file_size = await LocalStorageService.save_file(workspace_id, file)
+        # Determine file size
+        file.file.seek(0, 2)
+        file_size = file.file.tell()
+        file.file.seek(0)
 
+        # Generate unique s3 storage key
+        unique_name = f"{uuid.uuid4()}{file_ext}"
+        storage_path = f"workspaces/{workspace_id}/{unique_name}"
+
+        # 1. Stream upload to S3 / MinIO
+        await storage_service.upload_file(
+            file_obj=file,
+            storage_path=storage_path,
+            content_type=file.content_type or "application/octet-stream",
+        )
+
+        # 2. Persist Document record with S3 key as file_path
         doc = await self.repo.create_document(
             workspace_id=workspace_id,
             uploaded_by=current_user.id,
             filename=filename,
-            file_path=file_path,
+            file_path=storage_path,
             file_type=file.content_type or "application/octet-stream",
             file_size_bytes=file_size,
         )
         await self.db.commit()
         await self.db.refresh(doc)
 
-        # Trigger background processing
+        # 3. Schedule asynchronous ingestion worker
         background_tasks.add_task(
             process_document_background,
             document_id=doc.id,
-            file_path=file_path,
+            storage_path=storage_path,
+            file_ext=file_ext,
             workspace_id=workspace_id,
         )
 
@@ -131,16 +163,13 @@ class DocumentService:
     ) -> dict:
         await self._verify_workspace_access(workspace_id, current_user.id)
 
-        # 1. Embed user query
         query_embeddings = await get_embeddings([query])
         if not query_embeddings:
             raise HTTPException(status_code=500, detail="Failed to embed query")
 
-        # 2. Vector search in pgvector
         chunks = await self.chunk_repo.similarity_search(workspace_id, query_embeddings[0], limit=4)
         context_texts = [c.content for c in chunks]
 
-        # 3. Synthesize answer
         answer = await generate_rag_answer(query, context_texts)
         return {
             "query": query,

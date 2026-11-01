@@ -14,8 +14,11 @@ class S3StorageService:
         self.endpoint_url = settings.S3_ENDPOINT_URL.strip() if settings.S3_ENDPOINT_URL else None
         self.access_key = settings.S3_ACCESS_KEY.strip() if settings.S3_ACCESS_KEY else None
         self.secret_key = settings.S3_SECRET_KEY.strip() if settings.S3_SECRET_KEY else None
-        self.bucket_name = settings.S3_BUCKET_NAME.strip()
+        self.bucket_name = settings.S3_BUCKET_NAME.strip() if settings.S3_BUCKET_NAME else None
         self.region = settings.S3_REGION.strip() if settings.S3_REGION else "us-east-1"
+
+        if not self.bucket_name:
+            raise RuntimeError("S3 bucket name is not configured")
 
     def _get_client_context(self):
         client_kwargs = {

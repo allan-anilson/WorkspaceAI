@@ -67,14 +67,80 @@ export async function listDocuments(workspaceId: string, token?: string){
   })
 }
 
-export async function uploadDocument(workspaceId: string, file: File, token?: string){
-  const fd = new FormData()
-  fd.append('file', file)
-  return request(`/workspaces/${workspaceId}/documents`, {
+export async function requestUploadIntent(
+  workspaceId: string,
+  data: { filename: string; file_type: string; file_size_bytes: number },
+  token?: string,
+) {
+  return request(`/workspaces/${workspaceId}/documents/upload-intent`, {
     method: 'POST',
-    headers: {Authorization: `Bearer ${token}`},
-    body: fd
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(data),
   })
+}
+
+export async function confirmDocumentUpload(
+  workspaceId: string,
+  documentId: string,
+  token?: string,
+) {
+  return request(`/workspaces/${workspaceId}/documents/${documentId}/confirm`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+}
+
+export async function getDocumentDownloadUrl(workspaceId: string, documentId: string, token?: string) {
+  return request(`/workspaces/${workspaceId}/documents/${documentId}/download-url`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+}
+
+export async function uploadDocument(workspaceId: string, file: File, token?: string){
+  const fileType = file.type || 'application/octet-stream'
+
+  const intent = await requestUploadIntent(
+    workspaceId,
+    {
+      filename: file.name,
+      file_type: fileType,
+      file_size_bytes: file.size,
+    },
+    token,
+  )
+
+  const s3UploadRes = await fetch(intent.upload_url, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': fileType,
+    },
+    body: file,
+  })
+
+  if (!s3UploadRes.ok) {
+    const details = await s3UploadRes.text().catch(() => '')
+    throw new Error(`S3 upload failed (${s3UploadRes.status})${details ? `: ${details}` : ''}`)
+  }
+
+  return confirmDocumentUpload(workspaceId, intent.document_id, token)
+}
+
+export async function downloadDocument(workspaceId: string, documentId: string, token?: string) {
+  const { download_url, filename } = await getDocumentDownloadUrl(workspaceId, documentId, token)
+
+  const link = document.createElement('a')
+  link.href = download_url
+  link.target = '_blank'
+  link.rel = 'noopener noreferrer'
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  return { download_url, filename }
 }
 
 export async function queryRAG(workspaceId: string, query: string, token?: string){

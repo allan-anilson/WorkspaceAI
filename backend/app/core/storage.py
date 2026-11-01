@@ -37,7 +37,6 @@ class S3StorageService:
                 await s3.head_bucket(Bucket=self.bucket_name)
             except ClientError as e:
                 error_code = str(e.response.get("Error", {}).get("Code", ""))
-                # Only create if it definitively does not exist (404 / NotFound)
                 if error_code in ("404", "NoSuchBucket", "NotFound"):
                     create_params = {"Bucket": self.bucket_name}
                     if self.region != "us-east-1":
@@ -46,8 +45,33 @@ class S3StorageService:
                         }
                     await s3.create_bucket(**create_params)
                 else:
-                    # Log or ignore if already owned or managed externally on AWS
                     pass
+
+    async def generate_presigned_upload_url(
+        self, storage_path: str, content_type: str, expiration: int = 900
+    ) -> str:
+        """Generates a temporary pre-signed PUT URL for direct client upload (15 min default)."""
+        async with self._get_client_context() as s3:
+            return await s3.generate_presigned_url(
+                ClientMethod="put_object",
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": storage_path,
+                    "ContentType": content_type,
+                },
+                ExpiresIn=expiration,
+            )
+
+    async def generate_presigned_download_url(
+        self, storage_path: str, expiration: int = 3600
+    ) -> str:
+        """Generates a temporary pre-signed GET URL for direct client download (1 hour default)."""
+        async with self._get_client_context() as s3:
+            return await s3.generate_presigned_url(
+                ClientMethod="get_object",
+                Params={"Bucket": self.bucket_name, "Key": storage_path},
+                ExpiresIn=expiration,
+            )
 
     async def upload_file(
         self,
@@ -55,7 +79,7 @@ class S3StorageService:
         storage_path: str,
         content_type: str = "application/octet-stream",
     ) -> str:
-        """Uploads file bytes or streams to S3 and returns the storage path key."""
+        """Uploads file bytes or streams directly to S3."""
         if isinstance(file_obj, UploadFile):
             stream = file_obj.file
             content_type = file_obj.content_type or content_type
@@ -75,7 +99,7 @@ class S3StorageService:
         return storage_path
 
     async def download_bytes(self, storage_path: str) -> bytes:
-        """Reads file bytes from S3 for text extraction and chunk processing."""
+        """Reads file bytes from S3 for worker text extraction and chunk processing."""
         async with self._get_client_context() as s3:
             response = await s3.get_object(Bucket=self.bucket_name, Key=storage_path)
             async with response["Body"] as stream:

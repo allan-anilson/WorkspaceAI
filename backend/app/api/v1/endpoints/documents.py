@@ -1,42 +1,160 @@
-import io
 import uuid
+from pathlib import Path
 from typing import List
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
 from app.core.storage import storage_service
-from app.db.models.document import Document
+from app.db.models.document import Document, DocumentStatus
 from app.db.models.organization import Workspace
 from app.db.models.user import User
 from app.repositories.organization_repo import OrganizationRepository
-from app.schemas.document import DocumentResponse
+from app.schemas.document import (
+    DocumentResponse,
+    PresignedDownloadResponse,
+    PresignedUploadRequest,
+    PresignedUploadResponse,
+)
 from app.schemas.rag import RAGQueryRequest, RAGQueryResponse
-from app.services.document_service import DocumentService
+from app.services.document_service import DocumentService, process_document_background
 
 router = APIRouter(prefix="/workspaces", tags=["Documents & RAG"])
 
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".docx", ".md"}
 
-@router.post("/{workspace_id}/documents",
-    response_model=DocumentResponse,
+
+async def verify_workspace_access(
+    workspace_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession
+) -> Workspace:
+    ws_result = await db.execute(select(Workspace).where(Workspace.id == workspace_id))
+    ws = ws_result.scalar_one_or_none()
+    if not ws:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    org_repo = OrganizationRepository(db)
+    member = await org_repo.get_member(org_id=ws.organization_id, user_id=user_id)
+    if not member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    return ws
+
+
+@router.post(
+    "/{workspace_id}/documents/upload-intent",
+    response_model=PresignedUploadResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload document to S3 and trigger asynchronous RAG ingestion",
+    summary="Generate pre-signed S3 upload URL",
 )
-async def upload_document(
+async def create_upload_intent(
     workspace_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    payload: PresignedUploadRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    service = DocumentService(db)
-    return await service.upload_document(
+    await verify_workspace_access(workspace_id, current_user.id, db)
+
+    file_ext = Path(payload.filename).suffix.lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+
+    storage_path = f"workspaces/{workspace_id}/{uuid.uuid4()}{file_ext}"
+
+    # Create document record in PENDING state
+    doc = Document(
         workspace_id=workspace_id,
-        file=file,
-        current_user=current_user,
-        background_tasks=background_tasks,
+        uploaded_by=current_user.id,
+        filename=payload.filename,
+        file_path=storage_path,
+        file_type=payload.file_type,
+        file_size_bytes=payload.file_size_bytes,
+        status=DocumentStatus.PENDING,
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+
+    upload_url = await storage_service.generate_presigned_upload_url(
+        storage_path=storage_path,
+        content_type=payload.file_type,
+    )
+
+    return PresignedUploadResponse(
+        document_id=doc.id,
+        upload_url=upload_url,
+        storage_path=storage_path,
+    )
+
+
+@router.post(
+    "/{workspace_id}/documents/{document_id}/confirm",
+    response_model=DocumentResponse,
+    summary="Confirm client upload completed and trigger RAG ingestion",
+)
+async def confirm_document_upload(
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await verify_workspace_access(workspace_id, current_user.id, db)
+
+    doc_result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.workspace_id == workspace_id,
+        )
+    )
+    doc = doc_result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    file_ext = Path(doc.filename).suffix.lower()
+
+    # Trigger background text extraction, embedding, and indexing
+    background_tasks.add_task(
+        process_document_background,
+        document_id=doc.id,
+        storage_path=doc.file_path,
+        file_ext=file_ext,
+        workspace_id=workspace_id,
+    )
+
+    return doc
+
+
+@router.get(
+    "/{workspace_id}/documents/{document_id}/download-url",
+    response_model=PresignedDownloadResponse,
+    summary="Get temporary pre-signed S3 download URL",
+)
+async def get_document_download_url(
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await verify_workspace_access(workspace_id, current_user.id, db)
+
+    doc_result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.workspace_id == workspace_id,
+        )
+    )
+    doc = doc_result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    download_url = await storage_service.generate_presigned_download_url(doc.file_path)
+
+    return PresignedDownloadResponse(
+        download_url=download_url,
+        filename=doc.filename,
     )
 
 
@@ -56,52 +174,6 @@ async def list_workspace_documents(
     )
 
 
-@router.get(
-    "/{workspace_id}/documents/{document_id}/download",
-    summary="Stream raw document bytes from S3/MinIO",
-)
-async def download_document(
-    workspace_id: uuid.UUID,
-    document_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    # 1. Verify workspace access
-    ws_result = await db.execute(select(Workspace).where(Workspace.id == workspace_id))
-    ws = ws_result.scalar_one_or_none()
-    if not ws:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
-
-    org_repo = OrganizationRepository(db)
-    member = await org_repo.get_member(org_id=ws.organization_id, user_id=current_user.id)
-    if not member:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-    # 2. Fetch document record
-    doc_result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.workspace_id == workspace_id,
-        )
-    )
-    doc = doc_result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-
-    # 3. Stream bytes from S3
-    try:
-        file_bytes = await storage_service.download_bytes(doc.file_path)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not retrieve file from storage: {exc}",
-        )
-
-    media_type = doc.file_type or "application/octet-stream"
-    headers = {"Content-Disposition": f'attachment; filename="{doc.filename}"'}
-    return StreamingResponse(io.BytesIO(file_bytes), media_type=media_type, headers=headers)
-
-
 @router.delete(
     "/{workspace_id}/documents/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -113,18 +185,8 @@ async def delete_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 1. Verify workspace access
-    ws_result = await db.execute(select(Workspace).where(Workspace.id == workspace_id))
-    ws = ws_result.scalar_one_or_none()
-    if not ws:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    await verify_workspace_access(workspace_id, current_user.id, db)
 
-    org_repo = OrganizationRepository(db)
-    member = await org_repo.get_member(org_id=ws.organization_id, user_id=current_user.id)
-    if not member:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-    # 2. Fetch document
     doc_result = await db.execute(
         select(Document).where(
             Document.id == document_id,
@@ -135,13 +197,11 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
-    # 3. Delete file object from S3
     try:
         await storage_service.delete_file(doc.file_path)
     except Exception:
         pass
 
-    # 4. Remove record from database (document chunks cascade via FK)
     await db.delete(doc)
     await db.commit()
 
